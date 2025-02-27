@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jeu de Capture de Drapeau</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #scores {
+            margin-top: 20px;
+            font-size: 18px;
+            text-align: center;
+        }
+        #timer {
+            margin-top: 20px;
+            font-size: 24px;
+            text-align: center;
+            color: red;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Jeu de Capture de Drapeau</h1>
+
+    <div>
+        <button id="startGameBtn">Démarrer la Partie</button>
+        <button id="captureRedBtn" disabled>Capturer le Drapeau (Red)</button>
+        <button id="captureBlueBtn" disabled>Capturer le Drapeau (Blue)</button>
+        <button id="endGameBtn" disabled>Terminer la Partie</button>
+        <button id="restartGameBtn" disabled>Redémarrer la Partie</button>
+    </div>
+
+    <div id="scores"></div>
+    <div id="timer"></div>
+</div>
+
+<script>
+    const startGameBtn = document.getElementById('startGameBtn');
+    const captureRedBtn = document.getElementById('captureRedBtn');
+    const captureBlueBtn = document.getElementById('captureBlueBtn');
+    const endGameBtn = document.getElementById('endGameBtn');
+    const restartGameBtn = document.getElementById('restartGameBtn');
+    const scoresDiv = document.getElementById('scores');
+    const timerDiv = document.getElementById('timer');
+
+    let gameId = null;
+    let timerInterval = null;
+
+    // Fonction pour démarrer la partie
+    startGameBtn.addEventListener('click', async () => {
+        const teamAId = prompt('Entrez l\'ID de l\'équipe A');
+        const teamBId = prompt('Entrez l\'ID de l\'équipe B');
+
+        const response = await fetch('http://127.0.0.1:8000/start_game/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({team_a: teamAId, team_b: teamBId})
+        });
+
+        const data = await response.json();
+        if (data.game_id) {
+            gameId = data.game_id;
+            alert('Partie démarrée!');
+            captureRedBtn.disabled = false;
+            captureBlueBtn.disabled = false;
+            endGameBtn.disabled = false;
+            restartGameBtn.disabled = false;
+            startTimer(30); // Démarrer le timer de 30 secondes
+        }
+    });
+
+    // Fonction pour capturer le drapeau par l'équipe Red
+    captureRedBtn.addEventListener('click', async () => {
+        await captureFlag('Red');
+    });
+
+    // Fonction pour capturer le drapeau par l'équipe Blue
+    captureBlueBtn.addEventListener('click', async () => {
+        await captureFlag('Blue');
+    });
+
+    // Fonction pour capturer le drapeau
+    async function captureFlag(teamName) {
+        const response = await fetch('http://127.0.0.1:8000/capture_flag/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({game_id: gameId, team: teamName})
+        });
+
+        const data = await response.json();
+        if (data.scores) {
+            updateScores(data.scores);
+        }
+    }
+
+    // Fonction pour terminer la partie
+    endGameBtn.addEventListener('click', async () => {
+        const response = await fetch('http://127.0.0.1:8000/end_game/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({game_id: gameId})
+        });
+
+        const data = await response.json();
+        alert(data.message);
+        clearInterval(timerInterval);
+        timerDiv.textContent = '';
+    });
+
+    // Fonction pour redémarrer la partie
+    restartGameBtn.addEventListener('click', async () => {
+        const response = await fetch('http://127.0.0.1:8000/restart_game/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({game_id: gameId})
+        });
+
+        const data = await response.json();
+        if (data.game_id) {
+            alert('Partie redémarrée!');
+            captureRedBtn.disabled = false;
+            captureBlueBtn.disabled = false;
+            endGameBtn.disabled = false;
+            startTimer(30); // Redémarrer le timer de 30 secondes
+        }
+    });
+
+    // Fonction pour mettre à jour les scores
+    function updateScores(scores) {
+        scoresDiv.innerHTML = `
+            <p>Équipe A: ${scores.team_a}</p>
+            <p>Équipe B: ${scores.team_b}</p>
+        `;
+    }
+
+    // Fonction pour démarrer le timer
+    function startTimer(duration) {
+        let timeRemaining = duration;
+        timerDiv.textContent = `Temps restant: ${timeRemaining} secondes`;
+
+        timerInterval = setInterval(() => {
+            timeRemaining--;
+            timerDiv.textContent = `Temps restant: ${timeRemaining} secondes`;
+
+            if (timeRemaining <= 0) {
+                clearInterval(timerInterval);
+                timerDiv.textContent = 'Temps écoulé!';
+                captureRedBtn.disabled = true;
+                captureBlueBtn.disabled = true;
+                endGameBtn.disabled = true;
+            }
+        }, 1000);
+    }
+</script>
+</body>
+</html>

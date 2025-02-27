@@ -1,6 +1,6 @@
-from django.urls import path
-from game.consumer import CaptureFlagConsumer
+from django.urls import re_path
+from .consumers import GameConsumer
 
 websocket_urlpatterns = [
-    path("ws/flag/", CaptureFlagConsumer.as_asgi()),
+    re_path(r'ws/game/(?P<game_id>\d+)/$', GameConsumer.as_asgi()),
 ]
