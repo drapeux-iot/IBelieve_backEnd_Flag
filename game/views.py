@@ -90,11 +90,7 @@ class EndGameView(APIView):
     def post(self, request, format=None):
         game = Game.objects.get(id=request.data['game_id'])
         
-        # Calculer l'heure de fin (ajouter 30 secondes au start_time)
-        if game.start_time:
-            game.end_time = game.start_time + timezone.timedelta(seconds=30)
-        else:
-            game.end_time = timezone.now()  # Si aucune start_time, on met l'heure actuelle (sécurisation)
+        game.end_time = timezone.now()
 
         # Déterminer le gagnant
         if game.team_a.score > game.team_b.score:
