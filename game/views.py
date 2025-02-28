@@ -1,178 +1,178 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .models import Game, Flag, Team
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
-from django.db import transaction
-from channels.layers import get_channel_layer
-import logging
+from .models import Game, Team, Flag
+import json
+from datetime import timedelta
 
-logger = logging.getLogger(__name__)
 
-class StartGameView(APIView):
-    def post(self, request, format=None):
-        team_a = Team.objects.get(id=request.data['team_a'])
-        team_b = Team.objects.get(id=request.data['team_b'])
-        
-        # Réinitialiser les scores à 0 pour les deux équipes
-        team_a.score = 0
-        team_b.score = 0
-        team_a.save()
-        team_b.save()
+# Variables globales pour le score et l'état de la partie
+game_started = False
+current_game = None  # Partie en cours
 
-        # Créer un flag pour la partie
-        flag = Flag.objects.create()
+@csrf_exempt
+def start_game(request):
+    global game_started, current_game
+    if request.method == 'POST':
+        game_started = True
 
-        # Créer un objet Game avec les deux équipes et le flag
-        game = Game.objects.create(team_a=team_a, team_b=team_b, flag=flag)
+        # Créer les équipes en premier
+        team_blue = Team.objects.create(name="Blue", score=0)
+        team_red = Team.objects.create(name="Red", score=0)
 
-        # Notification à travers le canal pour démarrer la partie
-        channel_layer = get_channel_layer()
-        message = {"message": "La partie a démarré", "game_id": game.id}
-        
-        channel_layer.group_send(
-            f"game_{game.id}",
-            {
-                "type": "send_to_game",
-                "message": message
-            }
+        # Ensuite, créer la partie avec les équipes assignées dès la création
+        current_game = Game.objects.create(
+            start_time=timezone.now(),
+            team_a=team_blue,
+            team_b=team_red
         )
 
-        return Response({"message": "Partie lancée", "game_id": game.id}, status=status.HTTP_201_CREATED)
+        return JsonResponse({'message': 'Jeu démarré'})
+    
+    return JsonResponse({'message': 'Méthode non supportée'}, status=405)
 
-class CaptureFlagView(APIView):
-    def post(self, request, format=None):
-        game_id = request.data.get('game_id')
-        team_name = request.data.get('team')
 
-        game = Game.objects.get(id=game_id)
-        team = Team.objects.get(name=team_name)
-        
-        with transaction.atomic():
-            flag = game.flag
-            flag.captured_by = team
-            flag.timestamp = timezone.now()
-            flag.save()
 
-            if team == game.team_a:
-                game.team_a.score += 1
-                game.team_a.save()  # Sauvegarder l'objet Team
-            elif team == game.team_b:
-                game.team_b.score += 1
-                game.team_b.save()  # Sauvegarder l'objet Team
-            game.save()
+@csrf_exempt
+def capture_flag(request):
+    global current_game
+    if request.method == 'POST':
+        if not current_game:
+            return JsonResponse({'message': 'La partie n\'a pas encore commencé'}, status=400)
 
-        logger.info(f"Scores après capture: Team A - {game.team_a.score}, Team B - {game.team_b.score}")
+        data = json.loads(request.body)
+        team_name = data.get('team')
 
-        channel_layer = get_channel_layer()
-        message = {
-            "message": f"Drapeau capturé par l'équipe {team_name} !",
-            "game_id": game_id,
-            "team_a_score": game.team_a.score,
-            "team_b_score": game.team_b.score
-        }
-        channel_layer.group_send(
-            f"game_{game_id}",
-            {
-                "type": "send_to_game",
-                "message": message
-            }
-        )
+        # Récupération de l'équipe
+        if team_name == "Blue":
+            team = current_game.team_a
+        elif team_name == "Red":
+            team = current_game.team_b
+        else:
+            return JsonResponse({'message': 'Équipe non valide'}, status=400)
 
-        return Response({"message": f"Drapeau capturé par l'équipe {team_name}!", "scores": {
-            "team_a": game.team_a.score,
-            "team_b": game.team_b.score
-        }}, status=status.HTTP_200_OK)
+        now = timezone.now()
 
-from django.utils import timezone
+        # Vérifier si un drapeau est déjà capturé
+        if current_game.flag:
+            previous_team = current_game.flag.captured_by
 
-class EndGameView(APIView):
-    def post(self, request, format=None):
-        game = Game.objects.get(id=request.data['game_id'])
-        
-        game.end_time = timezone.now()
+            # Calculer la durée de possession de l'équipe précédente
+            if previous_team:
+                previous_capture_duration = now - current_game.flag.timestamp
+
+                # Ajouter la durée au temps total de l'équipe précédente
+                if previous_team == current_game.team_a:
+                    current_game.team_a.total_time_held_flag += previous_capture_duration.total_seconds()
+                    current_game.team_a.save()
+                elif previous_team == current_game.team_b:
+                    current_game.team_b.total_time_held_flag += previous_capture_duration.total_seconds()
+                    current_game.team_b.save()
+
+            # Assigner le drapeau à la nouvelle équipe
+            current_game.flag.captured_by = team
+            current_game.flag.timestamp = now
+            current_game.flag.save()
+        else:
+            # Si aucun drapeau n'existe, en créer un
+            current_game.flag = Flag.objects.create(captured_by=team, timestamp=now)
+            current_game.save()
+
+        return JsonResponse({
+            'message': f'Drapeau capturé par l\'équipe {team_name}',
+        })
+
+    return JsonResponse({'message': 'Méthode non supportée'}, status=405)
+
+
+
+@csrf_exempt
+def end_game(request):
+    global game_started, current_game
+    if request.method == 'POST':
+        if not current_game:
+            return JsonResponse({'message': 'Aucune partie en cours'}, status=400)
+
+        game_started = False
+        now = timezone.now()
+
+        # Récupérer le temps total de possession stocké
+        blue_team_duration = current_game.team_a.total_time_held_flag
+        red_team_duration = current_game.team_b.total_time_held_flag
+
+        # Si le drapeau est actuellement détenu, ajouter la durée de possession en cours
+        if current_game.flag and current_game.flag.captured_by:
+            last_capture_duration = (now - current_game.flag.timestamp).total_seconds()
+            if current_game.flag.captured_by == current_game.team_a:
+                blue_team_duration += last_capture_duration
+            else:
+                red_team_duration += last_capture_duration
 
         # Déterminer le gagnant
-        if game.team_a.score > game.team_b.score:
-            game.winner = game.team_a
-        elif game.team_a.score < game.team_b.score:
-            game.winner = game.team_b
+        if blue_team_duration > red_team_duration:
+            winner = current_game.team_a
+            winner_name = "Blue"
+        elif red_team_duration > blue_team_duration:
+            winner = current_game.team_b
+            winner_name = "Red"
         else:
-            game.winner = None  # Si égalité
+            winner = None
+            winner_name = "Égalité"
 
-        game.save()
+        # Mettre à jour la partie
+        current_game.end_time = now
+        current_game.winner = winner
+        current_game.save()
 
-        # Envoi de message sur le canal
-        channel_layer = get_channel_layer()
-        message = {
-            "message": f"Partie terminée. Gagnant: {game.winner.name if game.winner else 'Égalité'}",
-            "game_id": game.id,
-            "team_a_score": game.team_a.score,
-            "team_b_score": game.team_b.score,
-            "end_time": game.end_time
-        }
-        channel_layer.group_send(
-            f"game_{game.id}",
-            {
-                "type": "send_to_game",
-                "message": message
+        return JsonResponse({
+            'message': 'Partie terminée',
+            'scores': {
+                "Blue": blue_team_duration,
+                "Red": red_team_duration
+            },
+            'winner': winner_name
+        })
+
+    return JsonResponse({'message': 'Méthode non supportée'}, status=405)
+
+
+def get_scores(request):
+    global current_game
+
+    if current_game:
+        flag = current_game.flag  # Récupérer le drapeau associé à la partie en cours
+
+        # Initialiser les durées de possession
+        blue_team_duration = timedelta(0)
+        red_team_duration = timedelta(0)
+
+        if flag and flag.captured_by:
+            # Ajouter la durée déjà comptabilisée
+            if flag.captured_by == current_game.team_a:
+                blue_team_duration = flag.capture_duration
+            elif flag.captured_by == current_game.team_b:
+                red_team_duration = flag.capture_duration
+
+            # Ajouter la durée en cours si la partie est active et que le drapeau est encore capturé
+            if game_started:
+                time_since_last_capture = timezone.now() - flag.timestamp
+                if flag.captured_by == current_game.team_a:
+                    blue_team_duration += time_since_last_capture
+                elif flag.captured_by == current_game.team_b:
+                    red_team_duration += time_since_last_capture
+
+        return JsonResponse({
+            'scores': {
+                "Blue": current_game.team_a.score,
+                "Red": current_game.team_b.score
+            },
+            'capture_durations': {
+                "Blue": str(blue_team_duration),
+                "Red": str(red_team_duration)
             }
-        )
+        })
 
-        return Response({
-            "message": f"Partie terminée. Gagnant: {game.winner.name if game.winner else 'Égalité'}",
-            "end_time": game.end_time,
-            "team_a_score": game.team_a.score,
-            "team_b_score": game.team_b.score
-        }, status=status.HTTP_200_OK)
+    return JsonResponse({'message': 'Aucune partie en cours'}, status=400)
 
 
-class GetScoresView(APIView):
-    def get(self, request, game_id, format=None):
-        try:
-            game = Game.objects.get(id=game_id)
-            team_a_score = game.team_a.score
-            team_b_score = game.team_b.score
-
-            return Response({
-                "game_id": game.id,
-                "team_a": {
-                    "name": game.team_a.name,
-                    "score": team_a_score
-                },
-                "team_b": {
-                    "name": game.team_b.name,
-                    "score": team_b_score
-                },
-                "winner" : game.winner.name if game.winner else None
-            }, status=status.HTTP_200_OK)
-        except Game.DoesNotExist:
-            return Response({"error": "Partie non trouvée"}, status=status.HTTP_404_NOT_FOUND)
-
-class RestartGameView(APIView):
-    async def post(self, request, format=None):
-        game_id = request.data.get('game_id')
-        try:
-            game = Game.objects.get(id=game_id)
-            game.team_a.score = 0
-            game.team_b.score = 0
-            game.flag.captured_by = None
-            game.flag.timestamp = None
-            game.flag.save()
-            game.start_time = timezone.now()
-            game.end_time = None
-            game.save()
-
-            channel_layer = get_channel_layer()
-            message = {"message": "La partie a été redémarrée", "game_id": game.id}
-            await channel_layer.group_send(
-                f"game_{game.id}",
-                {
-                    "type": "send_to_game",
-                    "message": message
-                }
-            )
-
-            return Response({"message": "Partie redémarrée", "game_id": game.id}, status=status.HTTP_200_OK)
-        except Game.DoesNotExist:
-            return Response({"error": "Partie non trouvée"}, status=status.HTTP_404_NOT_FOUND)
