@@ -36,15 +36,14 @@ def start_game(request):
 
 @csrf_exempt
 def capture_flag(request):
-    global current_game
+    global current_game, game_started
     if request.method == 'POST':
-        if not current_game:
+        if not current_game or not game_started:
             return JsonResponse({'message': 'La partie n\'a pas encore commencé'}, status=400)
 
         data = json.loads(request.body)
         team_name = data.get('team')
 
-        # Récupération de l'équipe
         if team_name == "Blue":
             team = current_game.team_a
         elif team_name == "Red":
@@ -54,15 +53,16 @@ def capture_flag(request):
 
         now = timezone.now()
 
-        # Vérifier si un drapeau est déjà capturé
         if current_game.flag:
             previous_team = current_game.flag.captured_by
 
-            # Calculer la durée de possession de l'équipe précédente
             if previous_team:
                 previous_capture_duration = now - current_game.flag.timestamp
 
-                # Ajouter la durée au temps total de l'équipe précédente
+                # **Mise à jour de capture_duration avant de changer de propriétaire**
+                current_game.flag.capture_duration += previous_capture_duration
+                current_game.flag.save()
+
                 if previous_team == current_game.team_a:
                     current_game.team_a.total_time_held_flag += previous_capture_duration.total_seconds()
                     current_game.team_a.save()
@@ -75,15 +75,14 @@ def capture_flag(request):
             current_game.flag.timestamp = now
             current_game.flag.save()
         else:
-            # Si aucun drapeau n'existe, en créer un
-            current_game.flag = Flag.objects.create(captured_by=team, timestamp=now)
+            # Création du drapeau
+            current_game.flag = Flag.objects.create(captured_by=team, timestamp=now, capture_duration=timedelta(0))
             current_game.save()
 
-        return JsonResponse({
-            'message': f'Drapeau capturé par l\'équipe {team_name}',
-        })
+        return JsonResponse({'message': f'Drapeau capturé par l\'équipe {team_name}'})
 
     return JsonResponse({'message': 'Méthode non supportée'}, status=405)
+
 
 
 
@@ -91,17 +90,19 @@ def capture_flag(request):
 def end_game(request):
     global game_started, current_game
     if request.method == 'POST':
-        if not current_game:
-            return JsonResponse({'message': 'Aucune partie en cours'}, status=400)
+        if not current_game or not game_started:
+            return JsonResponse({'message': 'Aucune partie en cours ou déjà terminée'}, status=400)
 
-        game_started = False
+        # Marquer la partie comme terminée
+        game_started = False  
         now = timezone.now()
+        current_game.end_time = now  # Met à jour l'heure de fin
 
-        # Récupérer le temps total de possession stocké
+        # Calcul du temps total de possession pour chaque équipe
         blue_team_duration = current_game.team_a.total_time_held_flag
         red_team_duration = current_game.team_b.total_time_held_flag
 
-        # Si le drapeau est actuellement détenu, ajouter la durée de possession en cours
+        # Ajouter le temps de possession en cours
         if current_game.flag and current_game.flag.captured_by:
             last_capture_duration = (now - current_game.flag.timestamp).total_seconds()
             if current_game.flag.captured_by == current_game.team_a:
@@ -120,10 +121,8 @@ def end_game(request):
             winner = None
             winner_name = "Égalité"
 
-        # Mettre à jour la partie
-        current_game.end_time = now
         current_game.winner = winner
-        current_game.save()
+        current_game.save()  # Sauvegarde après mise à jour de `end_time` et `winner`
 
         return JsonResponse({
             'message': 'Partie terminée',
@@ -135,6 +134,8 @@ def end_game(request):
         })
 
     return JsonResponse({'message': 'Méthode non supportée'}, status=405)
+
+
 
 
 def get_scores(request):
