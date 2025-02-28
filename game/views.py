@@ -18,6 +18,8 @@ def start_game(request):
     if request.method == 'POST':
         game_started = True
 
+        # Supprimer toutes les équipes existantes avant de commencer une nouvelle partie
+        Team.objects.all().delete()
         # Créer les équipes en premier
         team_blue = Team.objects.create(name="Blue", score=0)
         team_red = Team.objects.create(name="Red", score=0)
@@ -145,44 +147,4 @@ def end_game(request):
         })
 
     return JsonResponse({'message': 'Méthode non supportée'}, status=405)
-
-
-def get_scores(request):
-    global current_game
-
-    if current_game:
-        flag = current_game.flag  # Récupérer le drapeau associé à la partie en cours
-
-        # Initialiser les durées de possession
-        blue_team_duration = timedelta(0)
-        red_team_duration = timedelta(0)
-
-        if flag and flag.captured_by:
-            # Ajouter la durée déjà comptabilisée
-            if flag.captured_by == current_game.team_a:
-                blue_team_duration = flag.capture_duration
-            elif flag.captured_by == current_game.team_b:
-                red_team_duration = flag.capture_duration
-
-            # Ajouter la durée en cours si la partie est active et que le drapeau est encore capturé
-            if game_started:
-                time_since_last_capture = timezone.now() - flag.timestamp
-                if flag.captured_by == current_game.team_a:
-                    blue_team_duration += time_since_last_capture
-                elif flag.captured_by == current_game.team_b:
-                    red_team_duration += time_since_last_capture
-
-        return JsonResponse({
-            'scores': {
-                "Blue": current_game.team_a.score,
-                "Red": current_game.team_b.score
-            },
-            'capture_durations': {
-                "Blue": str(blue_team_duration),
-                "Red": str(red_team_duration)
-            }
-        })
-
-    return JsonResponse({'message': 'Aucune partie en cours'}, status=400)
-
 
