@@ -5,6 +5,7 @@ from django.utils import timezone
 from .models import Game, Team, Flag
 import json
 from datetime import timedelta
+from channels.layers import get_channel_layer
 
 
 # Variables globales pour le score et l'état de la partie
@@ -58,8 +59,6 @@ def capture_flag(request):
 
             if previous_team:
                 previous_capture_duration = now - current_game.flag.timestamp
-
-                # **Mise à jour de capture_duration avant de changer de propriétaire**
                 current_game.flag.capture_duration += previous_capture_duration
                 current_game.flag.save()
 
@@ -79,10 +78,22 @@ def capture_flag(request):
             current_game.flag = Flag.objects.create(captured_by=team, timestamp=now, capture_duration=timedelta(0))
             current_game.save()
 
+        # Notification via WebSocket
+        channel_layer = get_channel_layer()
+        team_name_message = f"{team_name} a capturé le drapeau !"
+        
+        # Envoi du message au groupe WebSocket
+        channel_layer.group_send(
+            'flag_updates',  # Le nom du groupe défini dans le consumer
+            {
+                'type': 'flag_status',
+                'team': team_name_message
+            }
+        )
+
         return JsonResponse({'message': f'Drapeau capturé par l\'équipe {team_name}'})
 
     return JsonResponse({'message': 'Méthode non supportée'}, status=405)
-
 
 
 
@@ -134,8 +145,6 @@ def end_game(request):
         })
 
     return JsonResponse({'message': 'Méthode non supportée'}, status=405)
-
-
 
 
 def get_scores(request):
